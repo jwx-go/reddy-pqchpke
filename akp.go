@@ -1,6 +1,7 @@
 package pqchpke
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/lestrrat-go/jwx/v4/jwa"
@@ -79,8 +80,7 @@ func exportHybrid(key jwk.Key, _ any) (any, error) {
 		// Cross-check: the public key derived from the seed must match
 		// the `pub` field bytes. If they disagree, the JWK is malformed
 		// or came from a different key family.
-		derivedPub := sk.Public().Bytes()
-		if !bytesEqual(derivedPub, pubBytes) {
+		if !bytes.Equal(sk.Public().Bytes(), pubBytes) {
 			return nil, fmt.Errorf(`pqchpke: "pub" field does not match key derived from "priv"`)
 		}
 		return sk, nil
@@ -95,14 +95,3 @@ func exportHybrid(key jwk.Key, _ any) (any, error) {
 	}
 }
 
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
