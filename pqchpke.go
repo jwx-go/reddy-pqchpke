@@ -1,9 +1,13 @@
 package pqchpke
 
 import (
+	"crypto/rand"
 	"errors"
+	"fmt"
 
 	"github.com/cloudflare/circl/kem/xwing"
+
+	"github.com/jwx-go/reddy-pqchpke/v4/internal/hpke"
 )
 
 // Algorithm identifiers from draft-reddy-cose-jose-pqc-hybrid-hpke §9.1.
@@ -48,49 +52,70 @@ type HybridPublicKey struct {
 }
 
 // HybridPrivateKey is a raw key type that holds a hybrid X25519+ML-KEM-768
-// private key seed. Implements jwebb.HPKEKeyDecrypter.
+// private key. Implements jwebb.HPKEKeyDecrypter.
 type HybridPrivateKey struct {
 	sk *xwing.PrivateKey
-	// seed caches the 32-byte seed used to derive sk, because circl's
-	// DeriveKeyPair doesn't expose it directly and we need it for AKP
-	// JWK export.
+	pk *xwing.PublicKey
+	// seed is the 32-byte X-Wing seed this key was derived from. Kept
+	// so Seed() can round-trip it without re-deriving from sk. X-Wing's
+	// private key IS the seed (PrivateKeySize = SeedSize = 32), but
+	// circl doesn't expose the seed directly from *PrivateKey.
 	seed [PrivateKeySize]byte
 }
 
 // GenerateKey produces a fresh hybrid key pair using crypto/rand.
 func GenerateKey() (*HybridPrivateKey, error) {
-	return nil, errors.New("pqchpke: GenerateKey not implemented")
+	var seed [PrivateKeySize]byte
+	if _, err := rand.Read(seed[:]); err != nil {
+		return nil, fmt.Errorf("pqchpke: generate seed: %w", err)
+	}
+	return PrivateKeyFromSeed(seed[:])
 }
 
-// PrivateKeyFromSeed constructs a HybridPrivateKey from a 32-byte seed
-// (typically the AKP JWK `priv` field).
+// PrivateKeyFromSeed constructs a HybridPrivateKey from a 32-byte seed,
+// typically read from an AKP JWK `priv` field.
 func PrivateKeyFromSeed(seed []byte) (*HybridPrivateKey, error) {
-	_ = seed
-	return nil, errors.New("pqchpke: PrivateKeyFromSeed not implemented")
+	if len(seed) != PrivateKeySize {
+		return nil, fmt.Errorf("pqchpke: seed must be %d bytes, got %d", PrivateKeySize, len(seed))
+	}
+	sk, pk := xwing.DeriveKeyPair(seed)
+	priv := &HybridPrivateKey{sk: sk, pk: pk}
+	copy(priv.seed[:], seed)
+	return priv, nil
 }
 
 // PublicKeyFromBytes constructs a HybridPublicKey from its 1216-byte
-// packed form (typically the AKP JWK `pub` field).
+// packed form, typically read from an AKP JWK `pub` field.
 func PublicKeyFromBytes(pub []byte) (*HybridPublicKey, error) {
-	_ = pub
-	return nil, errors.New("pqchpke: PublicKeyFromBytes not implemented")
+	if len(pub) != PublicKeySize {
+		return nil, fmt.Errorf("pqchpke: public key must be %d bytes, got %d", PublicKeySize, len(pub))
+	}
+	var pk xwing.PublicKey
+	if err := pk.Unpack(pub); err != nil {
+		return nil, fmt.Errorf("pqchpke: invalid public key: %w", err)
+	}
+	return &HybridPublicKey{pk: &pk}, nil
 }
 
 // Public returns the public key corresponding to this private key.
 func (sk *HybridPrivateKey) Public() *HybridPublicKey {
-	return nil
+	return &HybridPublicKey{pk: sk.pk}
 }
 
 // Seed returns a copy of the 32-byte X-Wing seed backing this private
-// key. Matches AKP JWK `priv` byte-for-byte.
+// key. This is the value that goes into the AKP JWK `priv` field.
 func (sk *HybridPrivateKey) Seed() []byte {
-	return nil
+	out := make([]byte, PrivateKeySize)
+	copy(out, sk.seed[:])
+	return out
 }
 
-// Bytes returns the 1216-byte packed form of this public key. Matches
-// AKP JWK `pub` byte-for-byte.
+// Bytes returns the 1216-byte packed form of this public key. This is
+// the value that goes into the AKP JWK `pub` field.
 func (pk *HybridPublicKey) Bytes() []byte {
-	return nil
+	out := make([]byte, PublicKeySize)
+	pk.pk.Pack(out)
+	return out
 }
 
 // EncryptHPKE implements jwebb.HPKEKeyEncrypter. It runs X-Wing
@@ -101,17 +126,72 @@ func (pk *HybridPublicKey) Bytes() []byte {
 // Returns the HPKE-sealed CEK and the 1120-byte encapsulated key that
 // becomes the `ek` JWE header parameter.
 func (pk *HybridPublicKey) EncryptHPKE(cek []byte, alg, calg string) (sealedCEK, enc []byte, err error) {
-	_ = cek
-	_ = alg
-	_ = calg
-	return nil, nil, errors.New("pqchpke: EncryptHPKE not implemented")
+	suite, err := suiteForAlg(alg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// X-Wing encapsulation consumes 64 bytes of randomness — this drives
+	// both the ML-KEM-768 encapsulation and the ephemeral X25519 scalar.
+	var encapSeed [xwing.EncapsulationSeedSize]byte
+	if _, err := rand.Read(encapSeed[:]); err != nil {
+		return nil, nil, fmt.Errorf("pqchpke: encap rand: %w", err)
+	}
+
+	ct := make([]byte, xwing.CiphertextSize)
+	ss := make([]byte, xwing.SharedKeySize)
+	pk.pk.EncapsulateTo(ct, ss, encapSeed[:])
+
+	info := hpkeKEInfo(calg)
+	sealedCEK, err = hpke.Seal(suite, ss, info, cek)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pqchpke: hpke seal: %w", err)
+	}
+	return sealedCEK, ct, nil
 }
 
 // DecryptHPKE implements jwebb.HPKEKeyDecrypter.
 func (sk *HybridPrivateKey) DecryptHPKE(sealedCEK []byte, alg, calg string, enc []byte) ([]byte, error) {
-	_ = sealedCEK
-	_ = alg
-	_ = calg
-	_ = enc
-	return nil, errors.New("pqchpke: DecryptHPKE not implemented")
+	suite, err := suiteForAlg(alg)
+	if err != nil {
+		return nil, err
+	}
+	if len(enc) != EncapsulatedKeySize {
+		return nil, fmt.Errorf("pqchpke: encapsulated key must be %d bytes, got %d", EncapsulatedKeySize, len(enc))
+	}
+
+	ss := make([]byte, xwing.SharedKeySize)
+	sk.sk.DecapsulateTo(ss, enc)
+
+	info := hpkeKEInfo(calg)
+	cek, err := hpke.Open(suite, ss, info, sealedCEK)
+	if err != nil {
+		return nil, fmt.Errorf("pqchpke: hpke open: %w", err)
+	}
+	return cek, nil
+}
+
+// suiteForAlg returns the internal HPKE ciphersuite for the given alg id.
+func suiteForAlg(alg string) (hpke.Ciphersuite, error) {
+	switch alg {
+	case HPKE10KE:
+		return hpke.SuiteHPKE10KE(), nil
+	case HPKE11KE:
+		return hpke.SuiteHPKE11KE(), nil
+	default:
+		return hpke.Ciphersuite{}, fmt.Errorf("%w: %s", ErrUnsupportedAlgorithm, alg)
+	}
+}
+
+// hpkeKEInfo builds the HPKE info bytes per draft-ietf-jose-hpke-encrypt §6.1:
+//
+//	Recipient_structure = "JOSE-HPKE rcpt" || 0xff || enc_value || 0xff
+func hpkeKEInfo(calg string) []byte {
+	prefix := []byte("JOSE-HPKE rcpt")
+	info := make([]byte, 0, len(prefix)+1+len(calg)+1)
+	info = append(info, prefix...)
+	info = append(info, 0xff)
+	info = append(info, calg...)
+	info = append(info, 0xff)
+	return info
 }
