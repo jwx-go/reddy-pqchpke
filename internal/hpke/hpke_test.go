@@ -68,19 +68,6 @@ func TestOpen_WrongSharedSecret(t *testing.T) {
 	require.Error(t, err, "wrong shared secret should fail to open")
 }
 
-// TestCrossCheckAgainstCircl validates our KDF-pluggable key schedule
-// against circl/hpke. The test instantiates our Seal with HKDF-SHA256
-// (via our hpke.NewHKDFSHA256KDF) and compares the output against
-// circl's X-Wing + HKDF-SHA256 + AES-256-GCM HPKE sealing. Structural
-// check only — does not validate the SHAKE256 primitive.
-//
-// See docs/design.md §9 for why this check matters.
-func TestCrossCheckAgainstCircl(t *testing.T) {
-	// TODO(internal/hpke impl): cross-check against
-	// github.com/cloudflare/circl/hpke with KEM_XWING + KDF_HKDF_SHA256
-	// + AEAD_AES256GCM. This requires figuring out how to inject a
-	// pre-computed shared_secret into circl's HPKE key schedule so we
-	// can compare byte-for-byte. Deferred to internal/hpke
-	// implementation phase.
-	t.Skip("cross-check deferred until internal/hpke implementation")
-}
+// The circl cross-check test lives in circl_cross_test.go so it can be
+// deleted in a single file-level rm when cloudflare/circl#553 merges and
+// drops this whole internal/hpke package.
