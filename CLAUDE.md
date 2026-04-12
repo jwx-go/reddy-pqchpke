@@ -41,20 +41,24 @@ GOEXPERIMENT=jsonv2 go test ./...
 
 ## Key design points
 
-- **Hand-rolled HPKE key schedule.** Go stdlib `crypto/hpke` is HKDF-only
-  and DHKEM-only. The draft's ciphersuites use SHAKE256 as the KDF and a
-  hybrid KEM, so we reimplement RFC 9180 `LabeledExtract` /
-  `LabeledExpand` / `KeySchedule` on top of `golang.org/x/crypto/sha3`.
-- **KEM combiner.** X25519 DH and ML-KEM-768 encap/decap run independently,
-  shared secrets are concatenated, then fed through a SHAKE256-based KDF
-  per draft §4 to produce the HPKE KEM shared secret.
-- **Encapsulated key wire format.** `enc_mlkem || enc_x25519` — ML-KEM
-  ciphertext first, X25519 ephemeral public second, no delimiter. Sizes
-  are fixed so splitting is by offset.
-- **AKP JWK encoding.** `pub = ek_mlkem || pub_x25519` (1184B + 32B).
-  `priv = dk_mlkem_seed || scalar_x25519` (32B + 32B). See the existing
-  `jwk/akp.go` `z` extension handling in the main jwx module for how
-  ML-KEM seeds round-trip.
+**READ `docs/design.md` FIRST.** It records the draft delegation chain,
+the X-Wing decision, the SHA3-256/SHAKE256 distinctions, and the AKP JWK
+encoding rationale. Everything below is a one-line summary; the design
+doc is authoritative.
+
+- **X-Wing KEM via `filippo.io/mlkem768/xwing`** — not hand-rolled. The
+  draft-irtf-cfrg-concrete-hybrid-kems §4.2 declares MLKEM768-X25519
+  "identical to X-Wing", so we use the named construction.
+- **Hand-rolled HPKE key schedule.** Stdlib `crypto/hpke` is HKDF-only
+  and DHKEM-only with no extension points. Draft-ietf-hpke-pq mandates
+  SHAKE256 as the HPKE KDF, so we reimplement RFC 9180 §5.1 on top of
+  `golang.org/x/crypto/sha3`.
+- **Encapsulated key wire format**: `ct_mlkem (1088) || ct_x25519 (32)`
+  = 1120 bytes, defined by X-Wing §5.4.
+- **AKP JWK**: `pub = 1216 bytes` (ML-KEM first), `priv = 32 bytes` (the
+  X-Wing seed). **Note the 32**, not 64 — X-Wing derives everything
+  from a single seed via `SHAKE256(seed, 96)`. The `z` extension field
+  from the jwx main `v4-mlkem.md` design does **not** apply here.
 
 ## Branch Policy
 
