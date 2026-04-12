@@ -17,28 +17,44 @@ package hpke
 
 import (
 	"crypto/cipher"
-	"errors"
+	"encoding/binary"
+	"fmt"
 )
 
-// ErrNotImplemented is returned by stubs that have not been implemented yet.
-// It will disappear once the implementation lands — test failures should
-// reference it during the TDD phase only.
-var ErrNotImplemented = errors.New("pqchpke/internal/hpke: not implemented")
+// versionLabel is the HPKE-v1 prefix used inside LabeledExtract / LabeledExpand /
+// LabeledDerive per RFC 9180 §4 and draft-ietf-hpke-pq §5.
+const versionLabel = "HPKE-v1"
 
-// KDF is the HPKE KDF interface. Only Extract and Expand are required for
-// the mode_base key schedule we implement. Two instantiations exist:
-// SHAKE256 (production, per draft-ietf-hpke-pq §5) and HKDF-SHA256 (tests,
-// for the circl cross-check).
+// modeBase is the RFC 9180 mode identifier for base (non-PSK, non-authenticated)
+// HPKE. This module only implements mode_base.
+const modeBase byte = 0x00
+
+// KDF is the HPKE KDF interface. Two-stage KDFs (HKDF family) implement
+// Extract + Expand. One-stage KDFs (SHAKE256 per draft-ietf-hpke-pq §5)
+// implement Derive instead. The keySchedule branches on IsTwoStage.
 type KDF interface {
-	// Nh returns the output length of the Extract function in bytes.
+	// Nh returns the natural output length of the KDF's Extract or Derive
+	// function in bytes. SHAKE256 = 64, HKDF-SHA256 = 32.
 	Nh() int
 
-	// Extract performs LabeledExtract per RFC 9180 §4.
+	// IsTwoStage reports whether this KDF follows RFC 9180's two-step
+	// Extract+Expand structure (true for HKDF-*) or the draft-ietf-hpke-pq
+	// one-stage Derive structure (false for SHAKE256).
+	IsTwoStage() bool
+
+	// Extract performs the HKDF Extract step. Only called for two-stage
+	// KDFs. One-stage KDFs may panic here.
 	Extract(salt, ikm []byte) []byte
 
-	// Expand performs LabeledExpand per RFC 9180 §4. L is the desired
-	// output length in bytes.
+	// Expand performs the HKDF Expand step. Only called for two-stage
+	// KDFs. One-stage KDFs may panic here.
 	Expand(prk, info []byte, L int) []byte
+
+	// Derive performs the one-stage KDF operation:
+	//   SHAKE<bits>(M = ikm, d = 8*L)
+	// per draft-ietf-hpke-pq §5. Only called for one-stage KDFs.
+	// Two-stage KDFs may panic here.
+	Derive(ikm []byte, L int) []byte
 
 	// ID returns the IANA HPKE KDF identifier used when building suite_id
 	// bytes. SHAKE256 = 0x0011, HKDF-SHA256 = 0x0001.
@@ -74,24 +90,162 @@ type Ciphersuite struct {
 	AEAD  AEAD
 }
 
-// Seal performs HPKE-KE sealing for mode_base. Given the 32-byte shared
-// secret already produced by the KEM, the JOSE HPKE info bytes (see
-// draft-ietf-jose-hpke-encrypt §6.1), and the CEK to seal, it returns the
-// AEAD-sealed ciphertext. This is intentionally narrow: it does not run
-// the KEM itself, and it does not derive or expose an exporter secret.
+// Seal performs HPKE-KE sealing for mode_base. Given the post-KEM shared
+// secret, the JOSE HPKE info bytes (see draft-ietf-jose-hpke-encrypt §6.1),
+// and the CEK to seal, it returns the AEAD-sealed ciphertext. This is
+// intentionally narrow: it does not run the KEM itself, and it does not
+// derive or expose an exporter secret.
+//
+// For HPKE-KE single-shot sealing the sequence number is always 0, so the
+// per-message nonce equals the base nonce. AAD is always empty per
+// draft-ietf-jose-hpke-encrypt §6 bullet 4.
 func Seal(suite Ciphersuite, sharedSecret, info, cek []byte) ([]byte, error) {
-	_ = suite
-	_ = sharedSecret
-	_ = info
-	_ = cek
-	return nil, ErrNotImplemented
+	key, baseNonce, err := keySchedule(suite, sharedSecret, info)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := suite.AEAD.New(key)
+	if err != nil {
+		return nil, fmt.Errorf("pqchpke/internal/hpke: new AEAD: %w", err)
+	}
+	return aead.Seal(nil, baseNonce, cek, nil), nil
 }
 
-// Open performs HPKE-KE opening for mode_base.
+// Open performs HPKE-KE opening for mode_base. Returns the plaintext CEK,
+// or an AEAD authentication error if the shared secret, info bytes, or
+// sealed ciphertext have been tampered with.
 func Open(suite Ciphersuite, sharedSecret, info, sealed []byte) ([]byte, error) {
-	_ = suite
-	_ = sharedSecret
-	_ = info
-	_ = sealed
-	return nil, ErrNotImplemented
+	key, baseNonce, err := keySchedule(suite, sharedSecret, info)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := suite.AEAD.New(key)
+	if err != nil {
+		return nil, fmt.Errorf("pqchpke/internal/hpke: new AEAD: %w", err)
+	}
+	cek, err := aead.Open(nil, baseNonce, sealed, nil)
+	if err != nil {
+		return nil, fmt.Errorf("pqchpke/internal/hpke: AEAD open: %w", err)
+	}
+	return cek, nil
+}
+
+// keySchedule is the RFC 9180 §5.1 mode_base key schedule, transliterated
+// to support both two-stage KDFs (Extract+Expand, per RFC 9180) and
+// one-stage KDFs (Derive, per draft-ietf-hpke-pq §5). For mode_base we
+// always use empty psk and psk_id.
+//
+// This function is the canonical source of the label bytes
+// ("psk_id_hash", "info_hash", "secret", "key", "base_nonce") — do not
+// change them without re-reading RFC 9180 §5.1.
+func keySchedule(suite Ciphersuite, sharedSecret, info []byte) (key, baseNonce []byte, err error) {
+	if suite.KDF == nil {
+		return nil, nil, fmt.Errorf("pqchpke/internal/hpke: suite KDF is nil")
+	}
+	if suite.AEAD == nil {
+		return nil, nil, fmt.Errorf("pqchpke/internal/hpke: suite AEAD is nil")
+	}
+
+	Nk := suite.AEAD.Nk()
+	Nn := suite.AEAD.Nn()
+	Nh := suite.KDF.Nh()
+
+	suiteID := hpkeSuiteID(suite)
+
+	if suite.KDF.IsTwoStage() {
+		pskIDHash := labeledExtract(suite.KDF, suiteID, nil, []byte("psk_id_hash"), nil)
+		infoHash := labeledExtract(suite.KDF, suiteID, nil, []byte("info_hash"), info)
+		context := concat([]byte{modeBase}, pskIDHash, infoHash)
+
+		secret := labeledExtract(suite.KDF, suiteID, sharedSecret, []byte("secret"), nil)
+		key = labeledExpand(suite.KDF, suiteID, secret, []byte("key"), context, Nk)
+		baseNonce = labeledExpand(suite.KDF, suiteID, secret, []byte("base_nonce"), context, Nn)
+		// exporter_secret would be labeledExpand(secret, "exp", context, Nh) —
+		// we don't use it in HPKE-KE single-shot sealing.
+		_ = Nh
+		return key, baseNonce, nil
+	}
+
+	// One-stage (SHAKE256) per draft-ietf-hpke-pq §5. Matches the
+	// bas/hpke-pq branch of cloudflare/circl (circl#553).
+	secrets := concat(
+		lengthPrefixed(nil), // psk (empty for mode_base)
+		lengthPrefixed(sharedSecret),
+	)
+	context := concat(
+		[]byte{modeBase},
+		lengthPrefixed(nil), // psk_id (empty for mode_base)
+		lengthPrefixed(info),
+	)
+	combined := labeledDerive(suite.KDF, suiteID, secrets, []byte("secret"), context, Nk+Nn+Nh)
+	key = combined[:Nk]
+	baseNonce = combined[Nk : Nk+Nn]
+	// exporter_secret = combined[Nk+Nn:]  // unused for HPKE-KE
+	return key, baseNonce, nil
+}
+
+// hpkeSuiteID builds the HPKE suite ID bytes per RFC 9180 §5.1:
+//
+//	"HPKE" || I2OSP(kem_id, 2) || I2OSP(kdf_id, 2) || I2OSP(aead_id, 2)
+//
+// For HPKE-10-KE: "HPKE" || 0x647a || 0x0011 || 0x0002.
+// For HPKE-11-KE: "HPKE" || 0x647a || 0x0011 || 0x0003.
+func hpkeSuiteID(suite Ciphersuite) []byte {
+	id := make([]byte, 10)
+	copy(id[0:4], "HPKE")
+	binary.BigEndian.PutUint16(id[4:6], suite.KEMID)
+	binary.BigEndian.PutUint16(id[6:8], suite.KDF.ID())
+	binary.BigEndian.PutUint16(id[8:10], suite.AEAD.ID())
+	return id
+}
+
+// labeledExtract performs RFC 9180 §4 LabeledExtract.
+func labeledExtract(kdf KDF, suiteID, salt, label, ikm []byte) []byte {
+	labeledIKM := concat([]byte(versionLabel), suiteID, label, ikm)
+	return kdf.Extract(salt, labeledIKM)
+}
+
+// labeledExpand performs RFC 9180 §4 LabeledExpand.
+func labeledExpand(kdf KDF, suiteID, prk, label, info []byte, L int) []byte {
+	var packedL [2]byte
+	binary.BigEndian.PutUint16(packedL[:], uint16(L))
+	labeledInfo := concat(packedL[:], []byte(versionLabel), suiteID, label, info)
+	return kdf.Expand(prk, labeledInfo, L)
+}
+
+// labeledDerive performs the one-stage labeled derive per
+// draft-ietf-hpke-pq §5, matching the circl#553 construction:
+//
+//	SHAKE256(
+//	    ikm || "HPKE-v1" || suite_id ||
+//	    I2OSP(len(label), 2) || label || I2OSP(L, 2) || context,
+//	    L
+//	)
+func labeledDerive(kdf KDF, suiteID, ikm, label, context []byte, L int) []byte {
+	var labelLen, packedL [2]byte
+	binary.BigEndian.PutUint16(labelLen[:], uint16(len(label)))
+	binary.BigEndian.PutUint16(packedL[:], uint16(L))
+	labeledIKM := concat(ikm, []byte(versionLabel), suiteID, labelLen[:], label, packedL[:], context)
+	return kdf.Derive(labeledIKM, L)
+}
+
+// lengthPrefixed prepends a 2-byte big-endian length to x.
+func lengthPrefixed(x []byte) []byte {
+	out := make([]byte, 2+len(x))
+	binary.BigEndian.PutUint16(out[0:2], uint16(len(x)))
+	copy(out[2:], x)
+	return out
+}
+
+// concat concatenates all the byte slices.
+func concat(parts ...[]byte) []byte {
+	total := 0
+	for _, p := range parts {
+		total += len(p)
+	}
+	out := make([]byte, 0, total)
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
 }
