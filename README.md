@@ -25,7 +25,7 @@ import _ "github.com/jwx-go/reddy-pqchpke/v4"
 
 This module intentionally implements **only** the X25519+ML-KEM-768 HPKE-KE ciphersuites from the draft. Rationale:
 
-- X25519+ML-KEM-768 is the only hybrid in the draft that can be built entirely on Go standard library (`crypto/mlkem`, `crypto/ecdh`, `golang.org/x/crypto/sha3`).
+- X25519+ML-KEM-768 is the only hybrid in the draft that corresponds to a named, peer-reviewed construction — [X-Wing](https://datatracker.ietf.org/doc/draft-connolly-cfrg-xwing-kem/).
 - It mirrors TLS 1.3's `X25519MLKEM768`, which is the hybrid PQ KEM most production deployments are asking about.
 - Key-encryption (`-KE`) mode slots into jwx's existing HPKE-KE machinery with minimal surgery.
 
@@ -34,12 +34,16 @@ Out of scope (for now):
 - Other ciphersuites from the draft (ML-KEM+P-256, ML-KEM+P-384, pure ML-KEM-512/768/1024).
 - Cross-implementation interop vectors (the draft publishes none yet).
 
+# Dependencies
+
+Runtime: `github.com/cloudflare/circl` (for the X-Wing KEM via `circl/kem/xwing`), `golang.org/x/crypto/sha3` (for the hand-rolled SHAKE256 HPKE key schedule), and the jwx core module. This matches the dependency pattern already used by the `jwx-go/x448` companion.
+
 # Why a separate module?
 
 Two reasons:
 
 1. **Draft stability.** `draft-reddy-cose-jose-pqc-hybrid-hpke` is an individual submission, not a working group document. The adopted JOSE PQ draft is `draft-ietf-jose-pqc-kem`, which jwx v4 implements in-tree. Keeping this experimental draft in a separate module prevents pre-adoption churn from affecting jwx's main API.
-2. **Hand-rolled crypto.** This module implements the HPKE key schedule (RFC 9180 §5.1) on top of SHAKE256 from scratch, because Go's `crypto/hpke` only supports HKDF-based KDFs and DHKEM. Until stdlib grows extension points for custom KEMs and KDFs, that logic lives here rather than in the main module.
+2. **Hand-rolled HPKE key schedule.** Go's `crypto/hpke` only supports HKDF-based KDFs and DHKEM; `cloudflare/circl`'s released HPKE likewise only supports HKDF KDFs. The draft mandates SHAKE256 as the HPKE KDF, so this module implements the RFC 9180 §5.1 key schedule on top of SHAKE256 from scratch. [cloudflare/circl#553](https://github.com/cloudflare/circl/pull/553) tracks upstream SHAKE256 HPKE support; when it merges, we can drop the hand-rolled code.
 
 # Installation
 

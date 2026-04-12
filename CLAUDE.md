@@ -28,8 +28,8 @@ Wrapper types `HybridPublicKey` / `HybridPrivateKey` implement
 
 | Package | Purpose |
 |---------|---------|
-| `internal/kemhpke` | Hand-rolled HPKE engine: RFC 9180 §5.1 KeySchedule on cSHAKE256, plus the X25519+ML-KEM-768 KEM combiner |
-| (root) | `HybridPublicKey` / `HybridPrivateKey`, `init()` registration, JWK import/export |
+| `internal/hpke` | Hand-rolled HPKE key schedule: RFC 9180 §5.1 `LabeledExtract` / `LabeledExpand` / `KeySchedule` on SHAKE256, KDF-pluggable for HKDF-SHA256 cross-testing |
+| (root) | `HybridPublicKey` / `HybridPrivateKey`, `init()` registration, JWK import/export. X-Wing KEM is imported from `github.com/cloudflare/circl/kem/xwing` |
 
 ## Build / Test
 
@@ -46,13 +46,16 @@ the X-Wing decision, the SHA3-256/SHAKE256 distinctions, and the AKP JWK
 encoding rationale. Everything below is a one-line summary; the design
 doc is authoritative.
 
-- **X-Wing KEM via `filippo.io/mlkem768/xwing`** — not hand-rolled. The
+- **X-Wing KEM via `cloudflare/circl/kem/xwing`** — not hand-rolled. The
   draft-irtf-cfrg-concrete-hybrid-kems §4.2 declares MLKEM768-X25519
-  "identical to X-Wing", so we use the named construction.
-- **Hand-rolled HPKE key schedule.** Stdlib `crypto/hpke` is HKDF-only
-  and DHKEM-only with no extension points. Draft-ietf-hpke-pq mandates
+  "identical to X-Wing", so we use the named construction. circl is the
+  same dep already used by the `jwx-go/x448` companion.
+- **Hand-rolled HPKE key schedule.** Stdlib `crypto/hpke` is HKDF-only;
+  circl's released HPKE is also HKDF-only. Draft-ietf-hpke-pq mandates
   SHAKE256 as the HPKE KDF, so we reimplement RFC 9180 §5.1 on top of
-  `golang.org/x/crypto/sha3`.
+  `golang.org/x/crypto/sha3`. [cloudflare/circl#553](https://github.com/cloudflare/circl/pull/553)
+  is the upstream PR that will eventually let us drop this code — when
+  it merges, `internal/hpke/` becomes ~30 lines of glue around circl.
 - **Encapsulated key wire format**: `ct_mlkem (1088) || ct_x25519 (32)`
   = 1120 bytes, defined by X-Wing §5.4.
 - **AKP JWK**: `pub = 1216 bytes` (ML-KEM first), `priv = 32 bytes` (the

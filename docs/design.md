@@ -42,38 +42,57 @@ test vectors in the draft appendix. Inheriting it means we're implementing
 "X-Wing" — a known quantity — rather than "one of several possible
 MLKEM768-X25519 combiners."
 
-## 3. Why `filippo.io/mlkem768/xwing` and not hand-rolled
+## 3. Why `cloudflare/circl` and not hand-rolled
 
-We depend on `filippo.io/mlkem768/xwing` as a **runtime** dependency
-rather than hand-rolling X-Wing inside `internal/xwing/`.
+We depend on `github.com/cloudflare/circl` — specifically
+`circl/kem/xwing` for the X-Wing KEM and `circl/hpke` as an HPKE test
+oracle — rather than hand-rolling X-Wing inside `internal/xwing/`.
 
 Rationale:
 
-- Maintained by Filippo Valsorda, who is a co-editor of
-  `draft-connolly-cfrg-xwing-kem` and a Go stdlib `crypto` maintainer.
-  When the draft moves, the library moves.
-- The public API is exactly the shape we need for the AKP JWK
-  round-trip:
-  - `NewKeyFromSeed(seed []byte)` takes a 32-byte seed → matches AKP's
-    `priv` field (also 32 bytes) directly
-  - `(*DecapsulationKey).EncapsulationKey() []byte` returns the full
-    1216-byte public key → matches AKP's `pub` field directly
-  - `Encapsulate` and `Decapsulate` return the raw 32-byte shared secret,
-    which feeds directly into our HPKE key schedule without any
-    intermediate wrapping
-- Minimal dep surface (BSD-3-Clause; depends only on stdlib `crypto/mlkem`,
-  `crypto/ecdh`, and `golang.org/x/crypto/sha3`)
-- **Precedent**: the `jwx-go/x448` companion module pulls in
-  `cloudflare/circl` for exactly the same reason — Go stdlib doesn't have
-  X448, a trusted third-party library does, so we use it. This module
-  inherits that pattern.
+- **Precedent**: the `jwx-go/x448` companion module already pulls in
+  `cloudflare/circl` for the same reason — Go stdlib doesn't have X448,
+  circl does, so x448 uses circl. This module inherits that pattern.
+- **One dep, two purposes**: `circl/kem/xwing` gives us the runtime
+  X-Wing KEM; `circl/hpke` gives us a structural test oracle for our
+  hand-rolled HPKE key schedule (see §4). Using circl for both means we
+  don't need a second third-party dep for testing.
+- **API fit**: `xwing.DeriveKeyPair(seed)` takes a 32-byte seed —
+  matches AKP `priv` (32 bytes) directly. `PrivateKeySize == 32` means
+  `sk.MarshalBinary()` round-trips the seed losslessly. `pk.Pack(buf)`
+  / `pk.Unpack(buf)` cover the 1216-byte `pub` round-trip. `Encapsulate`
+  and `Decapsulate` return the raw 32-byte shared secret directly.
+- **Authoritative source**: circl's PQ crypto work is maintained by Bas
+  Westerbaan, who is a co-editor of `draft-ietf-hpke-pq` and
+  `draft-connolly-cfrg-xwing-kem`. Upstream moves track the drafts.
 
-The obvious alternative — "avoid external crypto dependencies, hand-roll
-X-Wing from the draft pseudocode" — was considered and rejected. Record
-here so anyone tempted to rewrite understands why: the tradeoff was
-~80 LOC of hand-rolled crypto we'd have to audit and maintain against a
-trivially-importable library whose author maintains the reference
-implementation of the underlying spec.
+Two alternatives were considered and rejected:
+
+- **Hand-rolling X-Wing** (~80 LOC from the draft pseudocode): rejected
+  because circl's implementation already exists, is maintained by a
+  draft co-editor, and gives us a free test oracle as a side effect.
+- **`filippo.io/mlkem768/xwing`** (Filippo Valsorda's tiny focused
+  package, also by a draft co-editor): rejected in favor of circl
+  because it would be a second dep alongside circl-for-tests. Single
+  dep is simpler to upgrade and matches the x448 companion's pattern.
+  Filippo's API is arguably cleaner (direct-byte inputs, no
+  caller-allocated `Pack` buffers), but not by enough to justify a
+  second import path.
+
+### Minor circl API ceremony (wrap once and forget)
+
+- `sk.Pack(buf)` / `pk.Pack(buf)` panic on wrong-size buffers. Our
+  wrapper types pre-allocate at the known sizes (`SeedSize`,
+  `PublicKeySize`).
+- `xwing.Decapsulate(ct, sk)` returns `ss` with no error. X-Wing has
+  implicit rejection — it semantically cannot fail. Our
+  `jwebb.HPKEKeyDecrypter.DecryptHPKE` still returns an error for
+  downstream AEAD failures in the HPKE key schedule.
+- The package-level `xwing.Encapsulate` returns `(ss, ct)` — note this
+  is the reverse of circl's generic `kem.Scheme` interface; the package
+  doc explicitly warns. We use the package-level function so the order
+  is per the X-Wing standard, but don't get confused if you also touch
+  `xwing.Scheme()`.
 
 ## 4. Why we still hand-roll the HPKE key schedule
 
@@ -95,6 +114,45 @@ We do **not** reimplement streaming Sender/Recipient — just enough to
 `Seal(cek)` / `Open(sealed)` for the JWE key-encryption path. The adaptation
 from HKDF to SHAKE256 is mechanical; follow `draft-ietf-hpke-pq` §5 for
 the exact cSHAKE framing.
+
+### Exit strategy: cloudflare/circl PR #553
+
+Bas Westerbaan has an open WIP PR against cloudflare/circl that adds
+exactly the support we need:
+
+> [cloudflare/circl#553 "[WIP] HPKE updates"](https://github.com/cloudflare/circl/pull/553)
+>
+> - One-stage SHAKE-based KDFs in the HPKE key schedule
+> - Hybrid QSF-X25519-MLKEM768 KEM (X-Wing)
+> - Pure ML-KEM-{512,768,1024} KEMs
+>
+> Implements draft-ietf-hpke-pq-01. Draft status since July 2025.
+
+When that PR merges and lands in a circl release, `internal/hpke/`
+becomes ~30 lines of glue around
+`circl/hpke.NewSender(KEM_XWING, KDF_SHAKE256, AEAD_AES256GCM, ...)`
+instead of the full ~120 LOC we hand-rolled. Delete our key schedule,
+swap in circl's, keep the wrapper types.
+
+Until that PR merges, we can't use it — it's force-pushable and
+undocumented, and we'd be shipping on top of someone else's
+work-in-progress. But the PR's existence is the reason the hand-rolled
+code in `internal/hpke/` is labeled "temporary" — future maintainers
+should drop it rather than polishing it.
+
+When editing `internal/hpke/schedule.go`, include a
+`// TODO(circl#553)` comment linking the PR so the exit strategy is
+discoverable without rereading this doc.
+
+### KDF-pluggable key schedule
+
+`internal/hpke/` is structured so the KDF primitive is a parameter
+(hash/XOF constructor) rather than hard-coded to SHAKE256. This lets
+us instantiate the same code with HKDF-SHA256 in tests and compare
+byte-for-byte against circl's `KEM_XWING + KDF_HKDF_SHA256 + AEAD_AES256GCM`
+HPKE — see §9 of this doc. The ~20-30 LOC design overhead is the cost of
+admission for the structural test we can't otherwise run until SHAKE256
+HPKE has an independent reference.
 
 ## 5. SHA3-256 vs SHAKE256 — critical distinction
 
@@ -147,7 +205,7 @@ This matters because the earlier `v4-mlkem.md` design doc (in jwx main
 for pure ML-KEM-768/1024) introduced a private extension field `"z"` to
 round-trip the full ML-KEM seed. **That `z` hack does not apply here.**
 Do not carry it over. X-Wing's seed-based construction makes it
-unnecessary: you store 32 bytes, call `xwing.NewKeyFromSeed(priv)`, and
+unnecessary: you store 32 bytes, call `xwing.DeriveKeyPair(priv)`, and
 get back a fully usable decapsulation key with zero ambiguity.
 
 Import-side length checks:
@@ -207,6 +265,57 @@ draft is adopted by the WG, not before.
 If you're reading this because a user reported their serialized JWE
 broke after a `go get -u`, the first thing to check is whether any of
 the upstream drafts moved.
+
+## 9. Test strategy
+
+There is no draft-level HPKE test vector for the
+`MLKEM768-X25519 + SHAKE256 + AES-256-GCM` ciphersuite as of 2026-04.
+Until `draft-ietf-hpke-pq` publishes vectors or circl#553 lands in a
+release, we validate in layers instead:
+
+**X-Wing KEM correctness.** Trusted to `circl/kem/xwing` and its upstream
+tests. We do not re-validate. If draft-connolly moves, `go get -u`
+circl.
+
+**HPKE key schedule structural cross-check** (the load-bearing test).
+Because `internal/hpke/` is KDF-pluggable, we instantiate it with
+HKDF-SHA256 in a test and compare byte-for-byte against
+`circl/hpke.NewSender(KEM_XWING, KDF_HKDF_SHA256, AEAD_AES256GCM, ...)`
+for a fixed `(seed, cek, info)` triple. This validates:
+
+- The `0x647a` KEM suite_id bytes (`"KEM" || 0x64 0x7a`)
+- Every RFC 9180 label string (`"eae_prk"`, `"shared_secret"`,
+  `"secret"`, `"key"`, `"base_nonce"`, `"exp"`)
+- The `labeled_info` framing (`I2OSP(L, 2) || "HPKE-v1" || suite_id || label || info`)
+- The mode_base sequencing through `KeySchedule`
+- The AEAD key and nonce derivation
+
+Everything except the SHAKE256 primitive itself. If this test passes, a
+SHAKE256 instantiation of the same code is overwhelmingly likely to be
+correct too — the KDF primitive is swapped inside a single function, not
+smeared across the key schedule.
+
+**HPKE SHAKE256 self-consistency.** The production path (SHAKE256 KDF)
+can only be tested sender-vs-receiver: encrypt a CEK, decrypt it, assert
+they match. This catches obvious primitive-swap bugs (passing SHA3-256
+where SHAKE256 is expected) but cannot catch a consistent label-spelling
+error on both sides. The HKDF-SHA256 cross-check above is what catches
+those.
+
+**JWE round-trip.** For each of `HPKE-10-KE` and `HPKE-11-KE`, generate
+a hybrid key pair, encrypt a random plaintext with
+`jwe.Encrypt(..., jwe.WithKey(alg, pub))`, decrypt with the private key,
+assert the plaintext matches. Exercises the full integration seam into
+jwx.
+
+**JWK round-trip.** Marshal a hybrid `jwk.Key` to JSON, unmarshal,
+export to raw `*HybridPrivateKey`, encrypt again, verify. Assert
+`len(pub) == 1216`, `len(priv) == 32`, `kty == "AKP"`, `alg` present.
+
+**Pinned wire bytes.** Lock down the exact JWE produced by a fixed
+`(seed, plaintext, rand)` triple in a test file. Any future tweak to
+labels, info bytes, or suite constants will flag this test and force a
+conscious re-review against the current draft revision.
 
 ---
 
