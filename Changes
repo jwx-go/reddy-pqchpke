@@ -1,0 +1,11 @@
+Changes
+=======
+
+v4.0.0-alpha2 13 Apr 2026
+  * Compatibility release for jwx/v4 v4.0.0-scratch.15. No code changes.
+
+v4.0.0-alpha1 13 Apr 2026
+  * Initial version, hybrid PQ HPKE (HPKE-10-KE, HPKE-11-KE) per
+    draft-reddy-cose-jose-pqc-hybrid-hpke. Uses X-Wing KEM
+    (cloudflare/circl) and a hand-rolled HPKE key schedule on SHAKE256
+    per draft-ietf-hpke-pq.
