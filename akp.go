@@ -16,15 +16,15 @@ func init() {
 	// the importer defaults `alg` to HPKE-10-KE. Users who want
 	// HPKE-11-KE can override via key.Set(jwk.AlgorithmKey, ...) after
 	// import.
-	jwk.RegisterKeyImporter(importHybridPublicKey)
-	jwk.RegisterKeyImporter(importHybridPrivateKey)
+	panicOnRegistrationError(jwk.RegisterKeyImporter(importHybridPublicKey))
+	panicOnRegistrationError(jwk.RegisterKeyImporter(importHybridPrivateKey))
 
 	// Register exporters keyed by KeyKind("AKP:<alg>"). jwk.Export uses
 	// the key's KeyKind to pick an exporter, and jwk/akp.go's
 	// akpKeyKind() namespaces AKP keys by their alg field, so a JWK
 	// with alg=HPKE-10-KE ends up at KeyKind "AKP:HPKE-10-KE".
-	jwk.RegisterKeyExporter(jwk.KeyKind("AKP:"+HPKE10KE), jwk.KeyExportFunc(exportHybrid))
-	jwk.RegisterKeyExporter(jwk.KeyKind("AKP:"+HPKE11KE), jwk.KeyExportFunc(exportHybrid))
+	panicOnRegistrationError(jwk.RegisterKeyExporter(jwk.KeyKind("AKP:"+HPKE10KE), jwk.KeyExportFunc(exportHybrid)))
+	panicOnRegistrationError(jwk.RegisterKeyExporter(jwk.KeyKind("AKP:"+HPKE11KE), jwk.KeyExportFunc(exportHybrid)))
 }
 
 func importHybridPublicKey(src *HybridPublicKey) (jwk.Key, error) {
