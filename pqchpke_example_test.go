@@ -6,7 +6,7 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwa"
 	"github.com/lestrrat-go/jwx/v4/jwe"
 
-	"github.com/jwx-go/reddy-pqchpke/v4"
+	pqchpke "github.com/jwx-go/reddy-pqchpke/v4"
 )
 
 // Example demonstrates a full JWE round-trip using the hybrid

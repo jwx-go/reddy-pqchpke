@@ -8,7 +8,7 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwk"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jwx-go/reddy-pqchpke/v4"
+	pqchpke "github.com/jwx-go/reddy-pqchpke/v4"
 )
 
 // TestJWKImport_HybridPrivateKey imports a raw hybrid private key into a
