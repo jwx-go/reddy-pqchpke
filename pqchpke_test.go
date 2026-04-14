@@ -7,7 +7,7 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwe"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jwx-go/reddy-pqchpke/v4"
+	pqchpke "github.com/jwx-go/reddy-pqchpke/v4"
 )
 
 const samplePlaintext = "draft-reddy hybrid HPKE plaintext"

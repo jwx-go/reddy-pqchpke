@@ -18,11 +18,11 @@ func (shake256KDF) Nh() int          { return 64 }
 func (shake256KDF) IsTwoStage() bool { return false }
 func (shake256KDF) ID() uint16       { return 0x0011 }
 
-func (shake256KDF) Extract(salt, ikm []byte) []byte {
+func (shake256KDF) Extract(_, _ []byte) []byte {
 	panic("pqchpke/internal/hpke: shake256 is a one-stage KDF; Extract is not defined")
 }
 
-func (shake256KDF) Expand(prk, info []byte, L int) []byte {
+func (shake256KDF) Expand(_, _ []byte, _ int) []byte {
 	panic("pqchpke/internal/hpke: shake256 is a one-stage KDF; Expand is not defined")
 }
 
@@ -60,7 +60,7 @@ func (hkdfSHA256KDF) Expand(prk, info []byte, L int) []byte {
 	return out
 }
 
-func (hkdfSHA256KDF) Derive(ikm []byte, L int) []byte {
+func (hkdfSHA256KDF) Derive(_ []byte, _ int) []byte {
 	panic("pqchpke/internal/hpke: hkdf-sha256 is a two-stage KDF; Derive is not defined")
 }
 
