@@ -162,6 +162,20 @@ func (sk *HybridPrivateKey) Seed() []byte {
 	return out
 }
 
+// String redacts the seed so accidental %v / %+v logging of a
+// HybridPrivateKey cannot leak the 32-byte X-Wing seed. For a
+// post-quantum hybrid key the seed is the only secret (X-Wing derives
+// both the ML-KEM and X25519 components from it), so a single %+v in a
+// panic log or debug print would be a total compromise.
+func (sk *HybridPrivateKey) String() string {
+	return "pqchpke.HybridPrivateKey{redacted}"
+}
+
+// GoString does the same for %#v.
+func (sk *HybridPrivateKey) GoString() string {
+	return "pqchpke.HybridPrivateKey{redacted}"
+}
+
 // Bytes returns the 1216-byte packed form of this public key. This is
 // the value that goes into the AKP JWK `pub` field.
 func (pk *HybridPublicKey) Bytes() []byte {

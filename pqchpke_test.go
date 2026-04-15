@@ -1,6 +1,7 @@
 package pqchpke_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/lestrrat-go/jwx/v4/jwa"
@@ -111,4 +112,35 @@ func TestEncryptHPKE_UnsupportedAlgorithm(t *testing.T) {
 	// silently producing garbage.
 	_, _, err = pk.EncryptHPKE([]byte("cek"), "HPKE-5-KE", "A256GCM")
 	require.Error(t, err, "unsupported alg should be rejected")
+}
+
+func TestHybridPrivateKeyRedacted(t *testing.T) {
+	// Use a fixed seed so we can also check that the seed's first few
+	// bytes never appear in any formatted output — catches a future
+	// regression where String()/GoString() is deleted but %v still
+	// "works" because the struct happens to print empty.
+	sk, err := pqchpke.PrivateKeyFromSeed(sampleSeed[:])
+	require.NoError(t, err)
+
+	const redacted = "pqchpke.HybridPrivateKey{redacted}"
+
+	// Direct format verbs must all route through String()/GoString().
+	// Without the methods, %+v prints {sk:... pk:... seed:[1 2 3 ...]}
+	// and dumps the entire 32-byte X-Wing seed.
+	require.Equal(t, redacted, sk.String())
+	require.Equal(t, redacted, fmt.Sprintf("%v", sk))
+	require.Equal(t, redacted, fmt.Sprintf("%+v", sk))
+	require.Equal(t, redacted, fmt.Sprintf("%#v", sk))
+
+	// Real-world leak path: a caller embeds a *HybridPrivateKey in an
+	// outer struct and prints the outer struct with %+v. fmt recurses
+	// through the pointer into the pointee unless the pointee has its
+	// own Stringer, at which point the redacted form wins.
+	outer := struct {
+		Key *pqchpke.HybridPrivateKey
+	}{Key: sk}
+	out := fmt.Sprintf("%+v", outer)
+	require.Contains(t, out, redacted, "embedded pointer should render redacted")
+	require.NotContains(t, out, "seed:", "field name must not leak")
+	require.NotContains(t, out, "[1 2 3 4 5 6 7 8", "seed bytes must not leak")
 }
