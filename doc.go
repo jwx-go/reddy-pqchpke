@@ -33,8 +33,10 @@
 // Go's crypto/hpke only supports HKDF-based KDFs and DHKEM, while the
 // draft mandates a SHAKE256 KDF and a PQ/classical hybrid KEM. This
 // module therefore reimplements the RFC 9180 HPKE key schedule on top of
-// golang.org/x/crypto/sha3's cSHAKE256, and implements its own KEM
-// combiner over crypto/mlkem and crypto/ecdh.
+// golang.org/x/crypto/sha3's SHAKE256. The hybrid KEM itself is X-Wing
+// (MLKEM768+X25519), imported from github.com/cloudflare/circl/kem/xwing
+// rather than hand-rolled: draft-irtf-cfrg-concrete-hybrid-kems §4.2
+// declares MLKEM768-X25519 identical to X-Wing.
 //
 // Because the draft is pre-adoption, keeping this work in a separate
 // module prevents its churn from affecting jwx's main public API.
