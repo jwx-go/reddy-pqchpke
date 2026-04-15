@@ -21,6 +21,13 @@
 // key encryption algorithms, and the JWK importers/exporters needed to
 // round-trip hybrid keys through jwx's JWK and JWE machinery.
 //
+// Registration runs from init() and will panic if any of the jwa, jwk, or
+// jwebb registrations fail — for example, if another module has already
+// claimed HPKE-10-KE or HPKE-11-KE. This is intentional: a partially
+// registered extension would otherwise produce opaque "algorithm not found"
+// errors deep inside jwe.Encrypt / jwe.Decrypt, so the failure is surfaced
+// at program startup instead.
+//
 // # Why a separate module
 //
 // Go's crypto/hpke only supports HKDF-based KDFs and DHKEM, while the
