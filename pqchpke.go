@@ -154,8 +154,19 @@ func (sk *HybridPrivateKey) Public() *HybridPublicKey {
 	return &HybridPublicKey{pk: sk.pk, alg: sk.alg}
 }
 
-// Seed returns a copy of the 32-byte X-Wing seed backing this private
-// key. This is the value that goes into the AKP JWK `priv` field.
+// Seed returns a fresh copy of the 32-byte X-Wing seed backing this
+// private key. This is the value that goes into the AKP JWK `priv`
+// field.
+//
+// The returned slice is newly allocated and independent of the
+// receiver's internal storage. Callers that need to zeroize the seed
+// after use are responsible for wiping the returned slice themselves;
+// the receiver's own copy is not affected. Importing a *HybridPrivateKey
+// via jwk.Import similarly stores the seed bytes inside the resulting
+// jwk.Key, so a typical import flow leaves at least two live copies on
+// the heap. For an X-Wing hybrid key the seed is the only secret — it
+// derives both the ML-KEM-768 and the X25519 components — so every
+// live copy is equally sensitive.
 func (sk *HybridPrivateKey) Seed() []byte {
 	out := make([]byte, PrivateKeySize)
 	copy(out, sk.seed[:])
