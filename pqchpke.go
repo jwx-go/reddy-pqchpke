@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/cloudflare/circl/kem/xwing"
+	"github.com/lestrrat-go/jwx/v4/jwa"
 
 	"github.com/jwx-go/reddy-pqchpke/v4/internal/hpke"
 )
@@ -47,12 +48,28 @@ var ErrUnsupportedAlgorithm = errors.New("pqchpke: unsupported algorithm")
 // HybridPublicKey is a raw key type that holds a hybrid X25519+ML-KEM-768
 // public key (X-Wing encoding). It implements jwebb.HPKEKeyEncrypter so
 // jwe.Encrypt routes HPKE-10-KE / HPKE-11-KE operations through this type.
+//
+// The same X-Wing keypair can be used with either HPKE-10-KE or HPKE-11-KE.
+// When imported into a jwk.Key with jwk.Import, the resulting AKP JWK is
+// tagged with alg=HPKE-10-KE by default. To bind an imported key to
+// HPKE-11-KE instead, call WithAlgorithm before importing:
+//
+//	key, err := jwk.Import[jwk.Key](pk.WithAlgorithm(pqchpke.HPKE11()))
+//
+// Only HPKE-10-KE and HPKE-11-KE are accepted; any other algorithm is
+// rejected at import time.
 type HybridPublicKey struct {
-	pk *xwing.PublicKey
+	pk  *xwing.PublicKey
+	alg jwa.KeyEncryptionAlgorithm
 }
 
 // HybridPrivateKey is a raw key type that holds a hybrid X25519+ML-KEM-768
 // private key. Implements jwebb.HPKEKeyDecrypter.
+//
+// See HybridPublicKey for the alg-binding rules that apply when importing
+// this key into a jwk.Key. To bind to HPKE-11-KE at import time:
+//
+//	key, err := jwk.Import[jwk.Key](sk.WithAlgorithm(pqchpke.HPKE11()))
 type HybridPrivateKey struct {
 	sk *xwing.PrivateKey
 	pk *xwing.PublicKey
@@ -61,6 +78,40 @@ type HybridPrivateKey struct {
 	// private key IS the seed (PrivateKeySize = SeedSize = 32), but
 	// circl doesn't expose the seed directly from *PrivateKey.
 	seed [PrivateKeySize]byte
+	alg  jwa.KeyEncryptionAlgorithm
+}
+
+// Algorithm returns the key encryption algorithm this key is bound to,
+// or the zero value if no binding was set. The zero value means "use
+// the importer default" — currently HPKE-10-KE.
+func (pk *HybridPublicKey) Algorithm() jwa.KeyEncryptionAlgorithm {
+	return pk.alg
+}
+
+// WithAlgorithm returns a shallow copy of this key bound to the given
+// key encryption algorithm. The returned key behaves identically for
+// direct EncryptHPKE calls; the binding is consulted at jwk.Import
+// time so the resulting JWK carries the right alg field.
+//
+// The receiver is not mutated.
+func (pk *HybridPublicKey) WithAlgorithm(alg jwa.KeyEncryptionAlgorithm) *HybridPublicKey {
+	clone := *pk
+	clone.alg = alg
+	return &clone
+}
+
+// Algorithm returns the key encryption algorithm this key is bound to,
+// or the zero value if no binding was set.
+func (sk *HybridPrivateKey) Algorithm() jwa.KeyEncryptionAlgorithm {
+	return sk.alg
+}
+
+// WithAlgorithm returns a shallow copy of this key bound to the given
+// key encryption algorithm. See HybridPublicKey.WithAlgorithm.
+func (sk *HybridPrivateKey) WithAlgorithm(alg jwa.KeyEncryptionAlgorithm) *HybridPrivateKey {
+	clone := *sk
+	clone.alg = alg
+	return &clone
 }
 
 // GenerateKey produces a fresh hybrid key pair using crypto/rand.
@@ -98,8 +149,9 @@ func PublicKeyFromBytes(pub []byte) (*HybridPublicKey, error) {
 }
 
 // Public returns the public key corresponding to this private key.
+// The alg binding, if any, is propagated onto the returned public key.
 func (sk *HybridPrivateKey) Public() *HybridPublicKey {
-	return &HybridPublicKey{pk: sk.pk}
+	return &HybridPublicKey{pk: sk.pk, alg: sk.alg}
 }
 
 // Seed returns a copy of the 32-byte X-Wing seed backing this private
