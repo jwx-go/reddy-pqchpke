@@ -118,6 +118,69 @@ func TestJWKRoundTrip_PublicKey(t *testing.T) {
 	require.Equal(t, originalPub.Bytes(), exported.Bytes(), "pub round-trip")
 }
 
+// TestJWKImport_WithAlgorithm_HPKE11KE verifies that a hybrid key
+// tagged with HPKE-11-KE via WithAlgorithm imports with that alg,
+// instead of the HPKE-10-KE default.
+func TestJWKImport_WithAlgorithm_HPKE11KE(t *testing.T) {
+	sk, err := pqchpke.PrivateKeyFromSeed(sampleSeed[:])
+	require.NoError(t, err)
+
+	tagged := sk.WithAlgorithm(pqchpke.HPKE11())
+
+	k, err := jwk.Import[jwk.Key](tagged)
+	require.NoError(t, err)
+
+	alg, ok := k.Algorithm()
+	require.True(t, ok)
+	require.Equal(t, pqchpke.HPKE11KE, alg.String(), "alg follows WithAlgorithm")
+
+	// Public key path.
+	pk := tagged.Public()
+	kp, err := jwk.Import[jwk.Key](pk)
+	require.NoError(t, err)
+	alg, ok = kp.Algorithm()
+	require.True(t, ok)
+	require.Equal(t, pqchpke.HPKE11KE, alg.String(), "Public() propagates alg")
+}
+
+// TestJWKImport_WithAlgorithm_Invalid rejects a non-HPKE alg rather
+// than silently coercing it — the whole point of alg binding is to
+// fail loudly on mismatches.
+func TestJWKImport_WithAlgorithm_Invalid(t *testing.T) {
+	sk, err := pqchpke.PrivateKeyFromSeed(sampleSeed[:])
+	require.NoError(t, err)
+
+	rsaOAEP, ok := jwa.LookupKeyEncryptionAlgorithm("RSA-OAEP")
+	require.True(t, ok, "RSA-OAEP is a builtin jwa alg")
+
+	bad := sk.WithAlgorithm(rsaOAEP)
+	_, err = jwk.Import[jwk.Key](bad)
+	require.Error(t, err, "non-HPKE alg must be rejected at import")
+
+	_, err = jwk.Import[jwk.Key](bad.Public())
+	require.Error(t, err, "non-HPKE alg must be rejected at import (public)")
+}
+
+// TestHybridKey_Algorithm_ZeroValue reports an empty alg on a freshly
+// derived key — the importer default (HPKE-10-KE) is applied at
+// Import time, not recorded on the raw wrapper.
+func TestHybridKey_Algorithm_ZeroValue(t *testing.T) {
+	sk, err := pqchpke.PrivateKeyFromSeed(sampleSeed[:])
+	require.NoError(t, err)
+
+	require.Equal(t, "", sk.Algorithm().String())
+	require.Equal(t, "", sk.Public().Algorithm().String())
+
+	tagged := sk.WithAlgorithm(pqchpke.HPKE11())
+	require.Equal(t, pqchpke.HPKE11KE, tagged.Algorithm().String())
+	require.Equal(t, pqchpke.HPKE11KE, tagged.Public().Algorithm().String(),
+		"Public() must propagate alg from the private wrapper")
+
+	// Original untouched: WithAlgorithm returns a copy.
+	require.Equal(t, "", sk.Algorithm().String(),
+		"WithAlgorithm must not mutate the receiver")
+}
+
 // TestJWKExport_MismatchedPubPriv rejects an AKP JWK whose pub field
 // doesn't match the key derived from priv. This guards against
 // malformed or tampered JWKs.
