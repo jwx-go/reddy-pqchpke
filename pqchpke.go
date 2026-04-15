@@ -192,16 +192,20 @@ func (pk *HybridPublicKey) Bytes() []byte {
 // Returns the HPKE-sealed CEK and the 1120-byte encapsulated key that
 // becomes the `ek` JWE header parameter.
 func (pk *HybridPublicKey) EncryptHPKE(cek []byte, alg, calg string) (sealedCEK, enc []byte, err error) {
-	suite, err := suiteForAlg(alg)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// X-Wing encapsulation consumes 64 bytes of randomness — this drives
-	// both the ML-KEM-768 encapsulation and the ephemeral X25519 scalar.
+	// Draw the encap randomness first and zeroize on exit. Any future
+	// refactor that reorders statements here must still delete the read
+	// to reach EncapsulateTo with a zero seed — which would be obvious.
+	// X-Wing encapsulation consumes 64 bytes of randomness driving both
+	// the ML-KEM-768 encapsulation and the ephemeral X25519 scalar.
 	var encapSeed [xwing.EncapsulationSeedSize]byte
 	if _, err := rand.Read(encapSeed[:]); err != nil {
 		return nil, nil, fmt.Errorf("pqchpke: encap rand: %w", err)
+	}
+	defer clear(encapSeed[:])
+
+	suite, err := suiteForAlg(alg)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	ct := make([]byte, xwing.CiphertextSize)
