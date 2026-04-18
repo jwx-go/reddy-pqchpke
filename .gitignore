@@ -4,3 +4,6 @@
 /vendor/
 go.work
 go.work.sum
+
+# Agent-tooling scratch directories and Go workspace files
+.worktrees/
