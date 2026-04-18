@@ -89,7 +89,7 @@ func testJWKRoundTripPrivateKey(t *testing.T, alg string) {
 	encoded, err := json.Marshal(k)
 	require.NoError(t, err, "json.Marshal(jwk.Key)")
 
-	parsed, err := jwk.ParseKey[jwk.Key](encoded)
+	parsed, err := jwk.ParseKeyAs[jwk.Key](encoded)
 	require.NoError(t, err, "jwk.ParseKey")
 
 	exported, err := jwk.Export[*pqchpke.HybridPrivateKey](parsed)
@@ -110,7 +110,7 @@ func TestJWKRoundTrip_PublicKey(t *testing.T) {
 	encoded, err := json.Marshal(k)
 	require.NoError(t, err)
 
-	parsed, err := jwk.ParseKey[jwk.Key](encoded)
+	parsed, err := jwk.ParseKeyAs[jwk.Key](encoded)
 	require.NoError(t, err)
 
 	exported, err := jwk.Export[*pqchpke.HybridPublicKey](parsed)
