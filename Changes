@@ -1,6 +1,9 @@
 Changes
 =======
 
+v4.0.0 19 Apr 2026
+  * First stable v4 release. Tracks github.com/lestrrat-go/jwx/v4 v4.0.0.
+
 v4.0.0-alpha2 13 Apr 2026
   * Compatibility release for jwx/v4 v4.0.0-scratch.15. No code changes.
 
