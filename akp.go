@@ -10,8 +10,8 @@ import (
 )
 
 func init() {
-	panicOnRegistrationError(jwk.RegisterKeyImporter(importHybridPublicKey))
-	panicOnRegistrationError(jwk.RegisterKeyImporter(importHybridPrivateKey))
+	panicOnRegistrationError(jwk.RegisterKeyImporter(jwk.KeyImportFunc[*HybridPublicKey](importHybridPublicKey)))
+	panicOnRegistrationError(jwk.RegisterKeyImporter(jwk.KeyImportFunc[*HybridPrivateKey](importHybridPrivateKey)))
 
 	// Register exporters keyed by KeyKind("AKP:<alg>"). jwk.Export uses
 	// the key's KeyKind to pick an exporter, and jwk/akp.go's
