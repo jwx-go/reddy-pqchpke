@@ -1,6 +1,14 @@
 Changes
 =======
 
+v4.0.1 7 May 2026
+  * `EncryptHPKE` / `DecryptHPKE` enforce the wrapper's
+    `WithAlgorithm` binding at runtime: a mismatched `alg`
+    argument is rejected. Previously the binding was consulted at
+    `jwk.Import` time only, so bound keys could silently encrypt
+    or decrypt under a different ciphersuite than the caller
+    intended. Unbound keys remain unconstrained.
+
 v4.0.0 19 Apr 2026
   * First stable v4 release. Tracks github.com/lestrrat-go/jwx/v4 v4.0.0.
 
