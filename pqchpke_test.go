@@ -101,6 +101,54 @@ func testJWERoundTrip(t *testing.T, keyAlg jwa.KeyEncryptionAlgorithm, contentAl
 	require.Equal(t, samplePlaintext, string(decrypted), "round-trip plaintext match")
 }
 
+// TestAlgBindingEnforcedAtRuntime pins the contract that
+// EncryptHPKE / DecryptHPKE reject an alg argument that disagrees
+// with the wrapper's WithAlgorithm binding. An unbound key (no
+// WithAlgorithm call) accepts any registered HPKE alg.
+//
+// Without runtime enforcement, a caller binding their key to
+// HPKE-11-KE via WithAlgorithm would have that binding silently
+// ignored if the call site passed HPKE-10-KE — silent-wrong-behavior
+// where the wire artifact is valid for the *wrong* ciphersuite.
+func TestAlgBindingEnforcedAtRuntime(t *testing.T) {
+	sk, err := pqchpke.GenerateKey()
+	require.NoError(t, err)
+	pk := sk.Public()
+
+	t.Run("EncryptHPKE rejects mismatched alg on bound key", func(t *testing.T) {
+		bound := pk.WithAlgorithm(pqchpke.HPKE11())
+		_, _, err := bound.EncryptHPKE([]byte("cek"), pqchpke.HPKE10KE, "A256GCM")
+		require.Error(t, err, "bound HPKE-11-KE key must reject HPKE-10-KE alg")
+		require.Contains(t, err.Error(), "does not match key binding")
+	})
+
+	t.Run("DecryptHPKE rejects mismatched alg on bound key", func(t *testing.T) {
+		bound := sk.WithAlgorithm(pqchpke.HPKE11())
+		_, err := bound.DecryptHPKE([]byte("sealed"), pqchpke.HPKE10KE, "A256GCM",
+			make([]byte, pqchpke.EncapsulatedKeySize))
+		require.Error(t, err, "bound HPKE-11-KE key must reject HPKE-10-KE alg")
+		require.Contains(t, err.Error(), "does not match key binding")
+	})
+
+	t.Run("EncryptHPKE accepts matching alg on bound key", func(t *testing.T) {
+		bound := pk.WithAlgorithm(pqchpke.HPKE11())
+		_, _, err := bound.EncryptHPKE([]byte("cek"), pqchpke.HPKE11KE, "A128GCM")
+		require.NoError(t, err, "bound HPKE-11-KE key must accept HPKE-11-KE alg")
+	})
+
+	t.Run("EncryptHPKE on unbound key accepts either ciphersuite", func(t *testing.T) {
+		// pk is the public key from GenerateKey() with no WithAlgorithm
+		// call: pk.alg is the zero value, runtime must not gate.
+		require.Empty(t, pk.Algorithm().String(), "precondition: key is unbound")
+
+		_, _, err := pk.EncryptHPKE([]byte("cek"), pqchpke.HPKE10KE, "A256GCM")
+		require.NoError(t, err, "unbound key must accept HPKE-10-KE")
+
+		_, _, err = pk.EncryptHPKE([]byte("cek"), pqchpke.HPKE11KE, "A128GCM")
+		require.NoError(t, err, "unbound key must accept HPKE-11-KE")
+	})
+}
+
 func TestEncryptHPKE_UnsupportedAlgorithm(t *testing.T) {
 	sk, err := pqchpke.GenerateKey()
 	require.NoError(t, err)

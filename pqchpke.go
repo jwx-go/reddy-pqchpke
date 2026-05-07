@@ -89,9 +89,16 @@ func (pk *HybridPublicKey) Algorithm() jwa.KeyEncryptionAlgorithm {
 }
 
 // WithAlgorithm returns a shallow copy of this key bound to the given
-// key encryption algorithm. The returned key behaves identically for
-// direct EncryptHPKE calls; the binding is consulted at jwk.Import
-// time so the resulting JWK carries the right alg field.
+// key encryption algorithm. The binding is enforced at two boundaries:
+//
+//   - jwk.Import — the resulting AKP JWK carries the bound alg in its
+//     "alg" field rather than the HPKE-10-KE default.
+//   - EncryptHPKE — the alg argument must match the binding. A
+//     mismatched alg is rejected; a bound key cannot silently encrypt
+//     under a different ciphersuite than the caller intended.
+//
+// An unbound key (zero-value alg) is unconstrained at runtime: any
+// registered HPKE alg is accepted.
 //
 // The receiver is not mutated.
 func (pk *HybridPublicKey) WithAlgorithm(alg jwa.KeyEncryptionAlgorithm) *HybridPublicKey {
@@ -107,7 +114,10 @@ func (sk *HybridPrivateKey) Algorithm() jwa.KeyEncryptionAlgorithm {
 }
 
 // WithAlgorithm returns a shallow copy of this key bound to the given
-// key encryption algorithm. See HybridPublicKey.WithAlgorithm.
+// key encryption algorithm. The binding is enforced at jwk.Import (JWK
+// "alg" field) and at DecryptHPKE (alg argument must match). An
+// unbound key is unconstrained at runtime. See
+// HybridPublicKey.WithAlgorithm for the full discussion.
 func (sk *HybridPrivateKey) WithAlgorithm(alg jwa.KeyEncryptionAlgorithm) *HybridPrivateKey {
 	clone := *sk
 	clone.alg = alg
@@ -203,6 +213,15 @@ func (pk *HybridPublicKey) Bytes() []byte {
 // Returns the HPKE-sealed CEK and the 1120-byte encapsulated key that
 // becomes the `ek` JWE header parameter.
 func (pk *HybridPublicKey) EncryptHPKE(cek []byte, alg, calg string) (sealedCEK, enc []byte, err error) {
+	// Enforce the wrapper's alg binding (set via WithAlgorithm). An
+	// unbound key (zero-value alg) accepts any registered HPKE alg;
+	// a bound key rejects mismatched alg values rather than silently
+	// encrypting under a different ciphersuite than the caller
+	// intended.
+	if want := pk.alg.String(); want != "" && want != alg {
+		return nil, nil, fmt.Errorf("pqchpke: alg %q does not match key binding %q (set via WithAlgorithm)", alg, want)
+	}
+
 	// Draw the encap randomness first and zeroize on exit. Any future
 	// refactor that reorders statements here must still delete the read
 	// to reach EncapsulateTo with a zero seed — which would be obvious.
@@ -233,6 +252,12 @@ func (pk *HybridPublicKey) EncryptHPKE(cek []byte, alg, calg string) (sealedCEK,
 
 // DecryptHPKE implements jwebb.HPKEKeyDecrypter.
 func (sk *HybridPrivateKey) DecryptHPKE(sealedCEK []byte, alg, calg string, enc []byte) ([]byte, error) {
+	// Enforce the wrapper's alg binding — see EncryptHPKE for the
+	// rationale and the unbound-key fall-through.
+	if want := sk.alg.String(); want != "" && want != alg {
+		return nil, fmt.Errorf("pqchpke: alg %q does not match key binding %q (set via WithAlgorithm)", alg, want)
+	}
+
 	suite, err := suiteForAlg(alg)
 	if err != nil {
 		return nil, err
