@@ -49,15 +49,37 @@ var ErrUnsupportedAlgorithm = errors.New("pqchpke: unsupported algorithm")
 // public key (X-Wing encoding). It implements jwebb.HPKEKeyEncrypter so
 // jwe.Encrypt routes HPKE-10-KE / HPKE-11-KE operations through this type.
 //
-// The same X-Wing keypair can be used with either HPKE-10-KE or HPKE-11-KE.
-// When imported into a jwk.Key with jwk.Import, the resulting AKP JWK is
-// tagged with alg=HPKE-10-KE by default. To bind an imported key to
-// HPKE-11-KE instead, call WithAlgorithm before importing:
+// The same X-Wing keypair can be used with either HPKE-10-KE or
+// HPKE-11-KE. When imported into a jwk.Key with jwk.Import, the
+// resulting AKP JWK is tagged with alg=HPKE-10-KE by default. To bind
+// an imported key to HPKE-11-KE instead, call WithAlgorithm before
+// importing:
 //
 //	key, err := jwk.Import[jwk.Key](pk.WithAlgorithm(pqchpke.HPKE11()))
 //
-// Only HPKE-10-KE and HPKE-11-KE are accepted; any other algorithm is
-// rejected at import time.
+// Only HPKE-10-KE and HPKE-11-KE are accepted at import; any other
+// algorithm is rejected.
+//
+// # Don't forget to bind
+//
+// A user who intends HPKE-11-KE but forgets to call WithAlgorithm
+// gets a JWK whose "alg" field claims HPKE-10-KE — the import default.
+// The mismatch surfaces at the next use, not silently:
+//
+//   - jwe.Encrypt with this JWK and jwe.WithKey(HPKE11(), key)
+//     reaches EncryptHPKE with alg="HPKE-11-KE" but a wrapper bound
+//     to HPKE-10-KE. EncryptHPKE returns
+//     `pqchpke: alg "HPKE-11-KE" does not match key binding
+//     "HPKE-10-KE" (set via WithAlgorithm)` rather than silently
+//     producing an HPKE-10-KE wire artifact under an HPKE-11-KE
+//     intent.
+//
+//   - DecryptHPKE applies the same gate symmetrically.
+//
+// So the worst case for a forgotten WithAlgorithm is a JWK whose
+// on-disk "alg" field is wrong, plus a clear runtime error the next
+// time it's used. To avoid the round trip, set the binding at import
+// time.
 type HybridPublicKey struct {
 	pk  *xwing.PublicKey
 	alg jwa.KeyEncryptionAlgorithm
@@ -66,8 +88,9 @@ type HybridPublicKey struct {
 // HybridPrivateKey is a raw key type that holds a hybrid X25519+ML-KEM-768
 // private key. Implements jwebb.HPKEKeyDecrypter.
 //
-// See HybridPublicKey for the alg-binding rules that apply when importing
-// this key into a jwk.Key. To bind to HPKE-11-KE at import time:
+// See HybridPublicKey for the alg-binding rules and the don't-forget-
+// to-bind discussion that apply when importing this key into a
+// jwk.Key. To bind to HPKE-11-KE at import time:
 //
 //	key, err := jwk.Import[jwk.Key](sk.WithAlgorithm(pqchpke.HPKE11()))
 type HybridPrivateKey struct {
