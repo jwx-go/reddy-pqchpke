@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/cloudflare/circl v1.6.5
-	github.com/lestrrat-go/jwx/v4 v4.4.0
+	github.com/lestrrat-go/jwx/v4 v4.5.0
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/crypto v0.57.0
 )
